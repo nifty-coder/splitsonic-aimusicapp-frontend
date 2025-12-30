@@ -109,7 +109,7 @@ export function HeroSection() {
 
         {/* Input Section */}
         <div className="space-y-6 animate-slide-up" style={{ animationDelay: "0.2s" }}>
-          <div className="max-w-2xl mx-auto space-y-6">
+          <div className="max-w-3xl mx-auto space-y-6">
 
             <div className="relative group">
               <div className="absolute inset-0 bg-gradient-primary rounded-2xl blur-xl opacity-20 group-hover:opacity-30 transition-opacity" />

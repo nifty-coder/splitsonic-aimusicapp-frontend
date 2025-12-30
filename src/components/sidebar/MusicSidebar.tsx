@@ -25,9 +25,10 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
   const [downloadControllers, setDownloadControllers] = useState<Record<string, AbortController | null>>({});
   const [availableFiles, setAvailableFiles] = useState<Record<string, Set<string>>>({});
   const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>({});
-  const [playingKey, setPlayingKey] = useState<string | null>(null);
-  const [playingUrl, setPlayingUrl] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Multi-stem playback state
+  const audioPoolRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const [playingKeys, setPlayingKeys] = useState<Set<string>>(new Set());
+  const [stemVolumes, setStemVolumes] = useState<Record<string, number>>({});
   const { urls, removeMusicUrl, clearLibrary, updateMusicTitle, scheduleRemoveMusicUrl, undoRemoveMusicUrl, scheduleClearLibrary, undoClearLibrary } = useMusicLibrary();
   const { toast } = useToast();
 
@@ -69,57 +70,91 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
     return fileData;
   };
 
-  // Helper: Play or stop a file preview
+  // Helper: Play or stop a file preview (multi-stem support)
   const handlePlayToggle = async (e: any, key: string, f: any, musicUrl: any) => {
     e.stopPropagation();
     try {
-      if (playingKey === key) {
-        audioRef.current?.pause();
-        audioRef.current = null;
-        setPlayingKey(null);
-        if (playingUrl) {
-          URL.revokeObjectURL(playingUrl);
-          setPlayingUrl(null);
+      const audioPool = audioPoolRef.current;
+
+      // If already playing, pause and remove
+      if (playingKeys.has(key)) {
+        const audio = audioPool.get(key);
+        if (audio) {
+          audio.pause();
+          audioPool.delete(key);
         }
+        setPlayingKeys(prev => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
         return;
       }
 
-      // stop previous
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-      if (playingUrl) {
-        URL.revokeObjectURL(playingUrl);
-        setPlayingUrl(null);
-      }
-
+      // Create and play new audio
       let srcUrl: string | null = null;
       if (f.blobUrl) {
         srcUrl = f.blobUrl;
       } else if (musicUrl.cacheKey) {
-        // use individual stem endpoint for efficiency/streaming
         srcUrl = `${apiBase}/stems/${musicUrl.cacheKey}/${f.filename}`;
       }
 
-
-
       if (!srcUrl) throw new Error('No playable source');
       const audio = new Audio(srcUrl);
-      audioRef.current = audio;
+
+      // Set volume from state (default 100%)
+      audio.volume = (stemVolumes[key] ?? 100) / 100;
+
+      // Sync with other playing audio (if any)
+      const firstPlaying = Array.from(audioPool.values())[0];
+      if (firstPlaying && !firstPlaying.paused) {
+        audio.currentTime = firstPlaying.currentTime;
+      }
+
       audio.onended = () => {
-        setPlayingKey(null);
-        audioRef.current = null;
-        if (playingUrl) {
-          URL.revokeObjectURL(playingUrl);
-          setPlayingUrl(null);
-        }
+        audioPool.delete(key);
+        setPlayingKeys(prev => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
       };
+
       await audio.play();
-      setPlayingKey(key);
+      audioPool.set(key, audio);
+      setPlayingKeys(prev => new Set(prev).add(key));
     } catch (err: any) {
       toast({ title: 'Playback failed', description: err?.message || String(err), variant: 'destructive' });
     }
+  };
+
+  // Helper: Handle volume change for a stem
+  const handleVolumeChange = (key: string, volume: number) => {
+    setStemVolumes(prev => ({ ...prev, [key]: volume }));
+
+    // Update live audio if playing
+    const audio = audioPoolRef.current.get(key);
+    if (audio) {
+      audio.volume = volume / 100;
+    }
+  };
+
+  // Helper: Play all stems
+  const handlePlayAll = async (musicUrl: any) => {
+    if (!musicUrl.files) return;
+    for (const file of musicUrl.files) {
+      const key = `${musicUrl.id}-${file.filename}`;
+      if (!playingKeys.has(key)) {
+        await handlePlayToggle({ stopPropagation: () => { } }, key, file, musicUrl);
+      }
+    }
+  };
+
+  // Helper: Stop all stems
+  const handleStopAll = () => {
+    audioPoolRef.current.forEach(audio => audio.pause());
+    audioPoolRef.current.clear();
+    setPlayingKeys(new Set());
   };
 
   // Helper: download a file (from blobUrl or by extracting from remote ZIP)
@@ -161,49 +196,6 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
     }
   };
 
-  // When expanding a YouTube item, fetch the extracted file listing from backend
-  // const ensureAvailableFiles = async (musicUrlId: string, musicUrl: any) => {
-  //   if (!musicUrl.url || !musicUrl.url.startsWith('http')) return;
-  //   if (availableFiles[musicUrlId]) return; // already fetched
-  //   try {
-  //     const res = await fetch(`${apiBase}/youtube/extracted`, {
-  //       method: 'POST',
-  //       headers: { 'Content-Type': 'application/json' },
-  //       body: JSON.stringify({ youtube_url: musicUrl.url })
-  //     });
-  //     if (!res.ok) {
-  //       // ignore failure; we won't filter files in that case
-  //       return;
-  //     }
-  //     const json = await res.json();
-  //     // If backend provided a title header on prior /youtube request we may get it later
-  //     const titleHeader = res.headers.get('X-Video-Title');
-  //     if (titleHeader) {
-  //       setTitleOverrides(prev => ({ ...prev, [musicUrlId]: titleHeader }));
-  //       // Also update the stored MusicUrl title so it persists
-  //       try {
-  //         updateMusicTitle(musicUrlId, titleHeader);
-  //       } catch (e) {
-  //         // ignore
-  //       }
-  //     }
-  //     const names = new Set<string>();
-  //     if (Array.isArray(json.extracted_files)) {
-  //       for (const f of json.extracted_files) {
-  //         if (f && f.filename) {
-  //           // skip directory-like entries
-  //           if (f.filename.startsWith('audio/') || f.filename.endsWith('/')) continue;
-  //           names.add(f.filename);
-  //         }
-  //       }
-  //     }
-  //     setAvailableFiles(prev => ({ ...prev, [musicUrlId]: names }));
-  //   } catch (err) {
-  //     // ignore and don't block UI
-  //     console.warn('Failed to fetch extracted listing', err);
-  //   }
-  // };
-
   return (
     <div className="w-80 md:w-80 h-full md:h-screen bg-card border-r border-border/50 flex flex-col overflow-hidden">
       {/* Header */}
@@ -219,17 +211,13 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
               variant="ghost"
               className="text-destructive"
               onClick={() => {
-                // schedule clear with undo
                 try {
                   scheduleClearLibrary();
                   toast({
                     title: 'Library cleared',
                     description: 'All items removed. Undo?',
                     action: (
-                      <button
-                        className="text-sm underline"
-                        onClick={() => undoClearLibrary()}
-                      >
+                      <button className="text-sm underline" onClick={() => undoClearLibrary()}>
                         Undo
                       </button>
                     )
@@ -249,189 +237,175 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
       {/* URL List */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-4 space-y-3">
-          {urls.length === 0 ? null : (
-            urls.map((musicUrl, idx) => {
-              const isExpanded = expandedItems.has(musicUrl.id);
+          {urls.map((musicUrl, idx) => {
+            const isExpanded = expandedItems.has(musicUrl.id);
 
-              return (
-                <div
-                  key={musicUrl.id}
-                  className={cn(
-                    // softened visuals
-                    "bg-muted/10 rounded-xl border border-border/10 overflow-hidden transition-all duration-300",
-                    "animate-fade-in"
-                  )}
-                  style={{ animationDelay: `${idx * 60}ms` }}
+            return (
+              <div
+                key={musicUrl.id}
+                className={cn(
+                  "bg-muted/10 rounded-xl border border-border/10 overflow-hidden transition-all duration-300",
+                  "animate-fade-in"
+                )}
+                style={{ animationDelay: `${idx * 60}ms` }}
+              >
+                {/* URL Header */}
+                <button
+                  onClick={() => toggleExpanded(musicUrl.id)}
+                  className="w-full p-3 text-left flex items-center gap-3 hover:bg-muted/10 transition-colors"
                 >
-                  {/* URL Header */}
-                  <button
-                    onClick={() => {
-                      toggleExpanded(musicUrl.id);
+                  <div className="flex-shrink-0">
+                    {isExpanded ? (
+                      <ChevronDown className="w-4 h-4 text-primary" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium text-foreground text-sm">
+                        {titleOverrides[musicUrl.id] || musicUrl.title}
+                      </h3>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {musicUrl.addedAt.toLocaleDateString()}
+                    </p>
+                  </div>
+
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      try {
+                        scheduleRemoveMusicUrl(musicUrl.id);
+                        toast({
+                          title: 'Item deleted',
+                          description: 'The item has been removed. Undo?',
+                          action: (
+                            <button className="text-sm underline" onClick={() => undoRemoveMusicUrl(musicUrl.id)}>
+                              Undo
+                            </button>
+                          )
+                        });
+                      } catch (err: any) {
+                        toast({ title: 'Error', description: err?.message || 'Failed to delete item', variant: 'destructive' });
+                      }
                     }}
-                    className="w-full p-3 text-left flex items-center gap-3 hover:bg-muted/10 transition-colors"
+                    className="p-1 hover:bg-destructive/20 rounded transition-colors inline-flex items-center"
                   >
-                    <div className="flex-shrink-0">
-                      {isExpanded ? (
-                        <ChevronDown className="w-4 h-4 text-primary" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                      )}
-                    </div>
+                    <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive" />
+                  </span>
+                </button>
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-medium text-foreground text-sm">
-                          {titleOverrides[musicUrl.id] || musicUrl.title}
-                        </h3>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {musicUrl.addedAt.toLocaleDateString()}
-                      </p>
-                    </div>
-
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        try {
-                          scheduleRemoveMusicUrl(musicUrl.id);
-                          toast({
-                            title: 'Item deleted',
-                            description: 'The item has been removed. Undo?',
-                            action: (
-                              <button
-                                className="text-sm underline"
-                                onClick={() => {
-                                  undoRemoveMusicUrl(musicUrl.id);
-                                }}
-                              >
-                                Undo
-                              </button>
-                            )
+                {/* Layers Dropdown */}
+                {isExpanded && (
+                  <div className="border-t border-border/20 bg-card/0 animate-slide-up">
+                    <div className="p-2 space-y-2">
+                      <div className="space-y-1 mt-1">
+                        {musicUrl.layers.map((layer) => {
+                          const IconComponent = iconMap[layer.icon as keyof typeof iconMap] || Music;
+                          const f = musicUrl.files?.find(file => {
+                            const parts = file.filename.replace(/\\/g, '/').split('/');
+                            const basename = parts[parts.length - 1].split('.')[0].toLowerCase();
+                            return basename === layer.id.toLowerCase();
                           });
-                        } catch (err: any) {
-                          toast({ title: 'Error', description: err?.message || 'Failed to delete item', variant: 'destructive' });
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          const ev = e as React.KeyboardEvent<HTMLSpanElement>;
-                          ev.currentTarget.click?.();
-                        }
-                      }}
-                      className="p-1 hover:bg-destructive/20 rounded transition-colors inline-flex items-center"
-                    >
-                      <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive" />
-                    </span>
-                  </button>
 
-                  {/* Layers Dropdown */}
-                  {isExpanded && (
-                    <div className="border-t border-border/20 bg-card/0 animate-slide-up">
-                      <div className="p-2 space-y-2">
-                        {/* Unified Audio Tracks / Layers List */}
-                        <div className="space-y-1 mt-1">
-                          {musicUrl.layers.map((layer) => {
-                            const IconComponent = iconMap[layer.icon as keyof typeof iconMap] || Music;
+                          if (!f) return null;
+                          const trackKey = `${musicUrl.id}__${f.filename}`;
+                          const isPlaying = playingKeys.has(trackKey);
+                          const isOriginal = f.filename === 'original.mp3';
+                          const displayName = isOriginal ? 'Original Audio' : layer.name;
+                          const DisplayIcon = isOriginal ? Music2 : IconComponent;
 
-                            // Find the corresponding file in musicUrl.files
-                            const f = musicUrl.files?.find(file => {
-                              const parts = file.filename.replace(/\\/g, '/').split('/');
-                              const basename = parts[parts.length - 1].split('.')[0].toLowerCase();
-                              return basename === layer.id.toLowerCase();
-                            });
-
-                            if (!f) return null;
-                            const trackKey = `${musicUrl.id}__${f.filename}`;
-                            const isPlaying = playingKey === trackKey;
-
-                            return (
-                              <div
-                                key={layer.id}
-                                className={cn(
-                                  "group flex items-center gap-3 p-2 rounded-lg transition-all duration-200",
-                                  "bg-background/40 hover:bg-background/60 border border-border/5 mb-1",
-                                  isPlaying && "ring-1 ring-primary/30 bg-background/80"
-                                )}
-                              >
+                          return (
+                            <div
+                              key={layer.id}
+                              className={cn(
+                                "group flex flex-col p-2 rounded-lg transition-all duration-200",
+                                "bg-background/40 hover:bg-background/60 border border-border/5 mb-1",
+                                isPlaying && "ring-1 ring-primary/30 bg-background/80"
+                              )}
+                            >
+                              <div className="flex items-center gap-3">
                                 <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-md bg-muted/20 group-hover:bg-primary/10 transition-colors">
-                                  <IconComponent className={cn("w-4 h-4 transition-colors", isPlaying ? "text-primary" : "text-muted-foreground")} />
+                                  <DisplayIcon className={cn("w-4 h-4 transition-colors", isPlaying ? "text-primary" : "text-muted-foreground")} />
                                 </div>
 
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center justify-between gap-2">
-                                    <span className="text-sm font-medium text-foreground truncate">
-                                      {layer.name}
-                                    </span>
-
-                                    <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                                    <span className="text-sm font-medium text-foreground truncate">{displayName}</span>
+                                    <div className="flex items-center gap-1">
                                       <button
                                         onClick={(e) => handlePlayToggle(e, trackKey, f, musicUrl)}
                                         className={cn(
-                                          "p-1.5 rounded-md transition-all hover:scale-110",
-                                          isPlaying ? "bg-primary/20 text-primary" : "hover:bg-primary/10 text-muted-foreground hover:text-primary"
+                                          "p-1.5 rounded-md transition-all",
+                                          isPlaying ? "bg-primary/20 text-primary" : "hover:bg-primary/10 text-muted-foreground"
                                         )}
-                                        title={isPlaying ? "Stop Preview" : "Play Preview"}
                                       >
-                                        {isPlaying ? (
-                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                        ) : (
-                                          <Volume2 className="w-3.5 h-3.5" />
-                                        )}
+                                        {isPlaying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Volume2 className="w-3.5 h-3.5" />}
                                       </button>
-
                                       <button
                                         onClick={(e) => handleDownload(e, trackKey, f, musicUrl)}
                                         disabled={!!downloading[trackKey]}
-                                        className="p-1.5 rounded-md hover:bg-primary/10 text-muted-foreground hover:text-primary transition-all hover:scale-110 disabled:opacity-50"
-                                        title="Download Track"
+                                        className="p-1.5 rounded-md hover:bg-primary/10 text-muted-foreground"
                                       >
-                                        {downloading[trackKey] ? (
-                                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                        ) : (
-                                          <Download className="w-3.5 h-3.5" />
-                                        )}
+                                        {downloading[trackKey] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
                                       </button>
                                     </div>
                                   </div>
                                 </div>
                               </div>
-                            );
-                          })}
-                        </div>
 
-                        {musicUrl.processed && (
-                          <div className="pt-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="w-full text-xs gap-2 py-4 bg-primary/5 border-primary/10 hover:bg-primary/10 hover:border-primary/20 text-primary transition-all rounded-xl"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-                                window.open(`${base}/cache/${musicUrl.cacheKey}`, '_blank');
-                              }}
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              Download Complete ZIP Archive
-                            </Button>
-                          </div>
-                        )}
-
-                        {musicUrl.layers.length === 0 && (
-                          <div className="text-xs text-muted-foreground p-4 bg-muted/5 rounded-xl italic text-center border border-dashed border-border/20">
-                            No audio tracks found for this analysis.
-                          </div>
-                        )}
+                              {isPlaying && (
+                                <div className="mt-2 flex items-center gap-2 px-1">
+                                  <Volume2 className="w-3 h-3 text-muted-foreground" />
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    value={stemVolumes[trackKey] ?? 100}
+                                    onChange={(e) => handleVolumeChange(trackKey, Number(e.target.value))}
+                                    className="flex-1 h-1 bg-muted rounded-lg appearance-none cursor-pointer"
+                                  />
+                                  <span className="text-xs text-muted-foreground w-8 text-right">{stemVolumes[trackKey] ?? 100}%</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
+
+                      {musicUrl.processed && (
+                        <div className="pt-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full text-xs gap-2 py-4 bg-primary/5 border-primary/10 hover:bg-primary/10 text-primary transition-all rounded-xl"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                              window.open(`${base}/cache/${musicUrl.cacheKey}`, '_blank');
+                            }}
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download Complete ZIP Archive
+                          </Button>
+                        </div>
+                      )}
+
+                      {musicUrl.layers.length === 0 && (
+                        <div className="text-xs text-muted-foreground p-4 bg-muted/5 rounded-xl italic text-center border border-dashed border-border/20">
+                          No audio tracks found for this analysis.
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })
-          )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
