@@ -91,7 +91,6 @@ export function HeroSection() {
       setUploadProgress(100);
       toast({ title: 'Success', description: 'Audio file analyzed and added to library.' });
       setSelectedFile(null); // Clear selection on success
-      window.location.reload();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       toast({ title: 'Error', description: msg, variant: 'destructive' });

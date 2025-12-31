@@ -1,0 +1,401 @@
+import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { auth } from "@/lib/firebase";
+import { useAuth } from "@/contexts/AuthContext";
+
+export interface MusicLayer {
+    id: string;
+    name: string;
+    icon: string;
+    volume: number;
+}
+
+export interface MusicUrl {
+    id: string;
+    url: string;
+    title: string;
+    thumbnail: string;
+    addedAt: Date;
+    layers: MusicLayer[];
+    isLocalFile?: boolean;
+    fileDataUrl?: string | null;
+    files?: { filename: string; blobUrl: string }[];
+    cacheKey?: string;
+    processed?: boolean;
+    song_id?: string;
+    uid?: string;
+}
+
+interface MusicLibraryContextType {
+    urls: MusicUrl[];
+    isLoading: boolean;
+    isInitialized: boolean;
+    addAudioFile: (file: File, tosAgreed: boolean, stems?: string[]) => Promise<MusicUrl>;
+    removeMusicUrl: (id: string) => Promise<void>;
+    updateMusicTitle: (id: string, newTitle: string) => void;
+    clearLibrary: () => Promise<void>;
+    getPresignedUrl: (songId: string, filename: string) => Promise<string>;
+    refreshLibrary: () => Promise<void>;
+}
+
+const MusicLibraryContext = createContext<MusicLibraryContextType | undefined>(undefined);
+
+const STORAGE_KEY = "music-analyzer-library";
+
+export function MusicLibraryProvider({ children }: { children: ReactNode }) {
+    const { currentUser } = useAuth();
+    const [urls, setUrls] = useState<MusicUrl[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [isInitialized, setIsInitialized] = useState(false);
+
+    const loadLibrary = async () => {
+        try {
+            const stored = localStorage.getItem(STORAGE_KEY);
+            let localUrls: MusicUrl[] = [];
+
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                localUrls = parsed.map((url: any) => ({
+                    ...url,
+                    addedAt: new Date(url.addedAt),
+                    layers: ((url.layers && url.layers.length > 0) ? url.layers : (url.files ? generateLayersFromFiles(url.files) : [])).sort((a: any, b: any) => a.name.localeCompare(b.name))
+                }));
+
+                // Filter by UID to prevent leakage between accounts
+                if (currentUser) {
+                    localUrls = localUrls.filter(u => !u.uid || u.uid === currentUser.uid);
+                } else {
+                    localUrls = localUrls.filter(u => !u.uid);
+                }
+            }
+
+            const user = currentUser;
+            if (user) {
+                try {
+                    const token = await user.getIdToken();
+                    const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+                    const response = await fetch(`${base}/my-songs`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+
+                        const r2Urls: MusicUrl[] = data.songs.map((song: any) => ({
+                            id: song.song_id,
+                            url: `r2:${song.song_id}`,
+                            title: song.title || `Song ${song.song_id.substring(0, 8)}`,
+                            thumbnail: '',
+                            addedAt: song.created_at ? new Date(song.created_at) : new Date(),
+                            layers: generateLayersFromFiles(song.files.map((f: any) => ({ filename: f.filename }))),
+                            isLocalFile: false,
+                            fileDataUrl: null,
+                            files: song.files.map((f: any) => ({ filename: f.filename, blobUrl: '' })),
+                            song_id: song.song_id,
+                            uid: data.uid,
+                            processed: true,
+                        }));
+
+                        const merged = [...localUrls];
+                        r2Urls.forEach(r2 => {
+                            const index = merged.findIndex(u => u.song_id === r2.song_id);
+                            if (index !== -1) {
+                                merged[index] = { ...merged[index], ...r2 };
+                            } else {
+                                merged.push(r2);
+                            }
+                        });
+
+                        const sorted = [...merged].sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime());
+                        setUrls(sorted);
+                    } else {
+                        const sorted = [...localUrls].sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime());
+                        setUrls(sorted);
+                    }
+                } catch (e) {
+                    console.warn('Failed to load R2 songs:', e);
+                    const sorted = [...localUrls].sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime());
+                    setUrls(sorted);
+                }
+            } else {
+                const sorted = [...localUrls].sort((a, b) => b.addedAt.getTime() - a.addedAt.getTime());
+                setUrls(sorted);
+            }
+        } catch (e) {
+            console.error('Failed to load library:', e);
+        } finally {
+            setIsInitialized(true);
+        }
+    };
+
+    useEffect(() => {
+        setUrls([]);
+        setIsInitialized(false);
+        loadLibrary();
+    }, [currentUser]);
+
+    useEffect(() => {
+        if (!isInitialized) return;
+        try {
+            if (urls.length > 0) {
+                const sanitized = urls.map(u => ({
+                    ...u,
+                    files: u.files ? u.files.map(f => ({ filename: f.filename })) : undefined
+                }));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+            } else {
+                localStorage.removeItem(STORAGE_KEY);
+            }
+        } catch (e) { }
+    }, [urls, isInitialized]);
+
+    const addAudioFile = async (file: File, tosAgreed: boolean, stems?: string[]): Promise<MusicUrl> => {
+        setIsLoading(true);
+        try {
+            if (!tosAgreed) throw new Error("You must agree to the Terms of Service.");
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('tos_agreed', 'true');
+            if (stems && stems.length > 0) {
+                formData.append('stems', stems.join(','));
+            }
+
+            const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
+            if (siteKey && window.grecaptcha) {
+                try {
+                    const token = await window.grecaptcha.execute(siteKey, { action: 'upload' });
+                    formData.append('recaptcha_token', token);
+                } catch (e) { }
+            }
+
+            const user = currentUser;
+            const headers: HeadersInit = {};
+            if (user) {
+                try {
+                    const token = await user.getIdToken();
+                    headers['Authorization'] = `Bearer ${token}`;
+                } catch (e) { }
+            }
+
+            const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+            const res = await fetch(`${base}/upload`, {
+                method: 'POST',
+                headers,
+                body: formData,
+            });
+
+            if (!res.ok) {
+                let detail = `HTTP ${res.status}`;
+                try {
+                    const json = await res.json();
+                    detail = json.detail || json.message || json.error || JSON.stringify(json);
+                } catch (e) { }
+                throw new Error(detail);
+            }
+
+            const contentType = res.headers.get('content-type');
+            let newMusicUrl: MusicUrl;
+
+            if (contentType?.includes('application/json')) {
+                const data = await res.json();
+                newMusicUrl = {
+                    id: Date.now().toString(),
+                    url: `file:${file.name}`,
+                    title: data.title || file.name,
+                    thumbnail: '',
+                    addedAt: new Date(),
+                    layers: generateLayersFromFiles(data.files.map((f: string) => ({ filename: f }))),
+                    isLocalFile: true,
+                    fileDataUrl: null,
+                    files: data.files.map((f: string) => ({ filename: f, blobUrl: '' })),
+                    song_id: data.song_id,
+                    uid: data.uid,
+                    processed: true,
+                };
+            } else {
+                const blob = await res.blob();
+                const JSZipModule = await import('jszip');
+                const JSZip = (JSZipModule as any).default || JSZipModule;
+                const zip = await JSZip.loadAsync(blob);
+
+                const files: { filename: string; blobUrl: string }[] = [];
+                await Promise.all(Object.keys(zip.files).map(async (filename) => {
+                    if (filename.endsWith('/')) return;
+                    const fileData = await zip.files[filename].async('blob');
+                    const blobUrl = URL.createObjectURL(fileData);
+                    files.push({ filename, blobUrl });
+                }));
+
+                newMusicUrl = {
+                    id: Date.now().toString(),
+                    url: `file:${file.name}`,
+                    title: file.name,
+                    thumbnail: '',
+                    addedAt: new Date(),
+                    layers: generateLayersFromFiles(files),
+                    isLocalFile: true,
+                    fileDataUrl: null,
+                    files,
+                    cacheKey: res.headers.get('X-Cache-Key') || undefined,
+                    processed: true,
+                };
+            }
+
+            setUrls(prev => [newMusicUrl, ...prev]);
+            return newMusicUrl;
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const removeMusicUrl = async (id: string) => {
+        const itemToRemove = urls.find(u => u.id === id);
+        if (!itemToRemove) return;
+
+        setUrls(prev => prev.filter(url => url.id !== id));
+
+        if (itemToRemove.files) {
+            itemToRemove.files.forEach(f => {
+                if (f.blobUrl) {
+                    try { URL.revokeObjectURL(f.blobUrl); } catch { }
+                }
+            });
+        }
+
+        if (itemToRemove.song_id) {
+            try {
+                const user = currentUser;
+                if (user) {
+                    const token = await user.getIdToken();
+                    const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                    await fetch(`${base}/songs/${itemToRemove.song_id}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                }
+            } catch (e) { }
+        }
+    };
+
+    const clearLibrary = async () => {
+        const items = [...urls];
+        setUrls([]);
+        localStorage.removeItem(STORAGE_KEY);
+
+        const hasR2Items = items.some(u => u.song_id);
+        if (hasR2Items && currentUser) {
+            try {
+                const token = await currentUser.getIdToken();
+                const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                await fetch(`${base}/songs`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+            } catch (e) { }
+        }
+
+        try {
+            for (const u of items) {
+                if (u.files) {
+                    for (const f of u.files) {
+                        try { if (f.blobUrl) URL.revokeObjectURL(f.blobUrl); } catch { }
+                    }
+                }
+            }
+        } catch { }
+    };
+
+    const updateMusicTitle = (id: string, newTitle: string) => {
+        setUrls(prev => prev.map(u => u.id === id ? { ...u, title: newTitle } : u));
+    };
+
+    const getPresignedUrl = async (songId: string, filename: string): Promise<string> => {
+        const user = currentUser;
+        if (!user) throw new Error('Not authenticated');
+
+        const token = await user.getIdToken();
+        const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+        const response = await fetch(`${base}/presigned-url`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ song_id: songId, filename })
+        });
+
+        if (!response.ok) throw new Error(`Failed to get presigned URL: ${response.statusText}`);
+
+        const data = await response.json();
+        return data.url;
+    };
+
+    return (
+        <MusicLibraryContext.Provider value={{
+            urls,
+            isLoading,
+            isInitialized,
+            addAudioFile,
+            removeMusicUrl,
+            updateMusicTitle,
+            clearLibrary,
+            getPresignedUrl,
+            refreshLibrary: loadLibrary
+        }}>
+            {children}
+        </MusicLibraryContext.Provider>
+    );
+}
+
+export const useMusicLibraryContext = () => {
+    const context = useContext(MusicLibraryContext);
+    if (context === undefined) {
+        throw new Error('useMusicLibraryContext must be used within a MusicLibraryProvider');
+    }
+    return context;
+};
+
+function generateLayersFromFiles(files: { filename: string; blobUrl?: string }[]): MusicLayer[] {
+    const mapping: Record<string, { name: string; icon: string }> = {
+        'original': { name: 'Original Audio', icon: 'Music' },
+        'vocals': { name: 'Vocals', icon: 'Mic' },
+        'vocal': { name: 'Vocals', icon: 'Mic' },
+        'bass': { name: 'Bass', icon: 'Volume2' },
+        'drums': { name: 'Percussion', icon: 'Drum' },
+        'drum': { name: 'Percussion', icon: 'Drum' },
+        'other': { name: 'Other', icon: 'Zap' },
+        'instrumental': { name: 'Instrumental', icon: 'Music' },
+    };
+
+    const layers: MusicLayer[] = [];
+    files.forEach(f => {
+        if (!f.filename) return;
+        const parts = f.filename.replace(/\\/g, '/').split('/');
+        const lastPart = parts[parts.length - 1];
+        const basename = lastPart.split('.')[0].toLowerCase();
+        const extension = lastPart.split('.').pop()?.toLowerCase();
+        const isAudioFile = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'].includes(extension || '');
+        if (!isAudioFile) return;
+
+        const info = mapping[basename];
+        if (info) {
+            if (!layers.find(l => l.id === basename)) {
+                layers.push({ id: basename, name: info.name, icon: info.icon, volume: 100 });
+            }
+        } else if (f.filename.toLowerCase().endsWith('.mp3') || f.filename.toLowerCase().endsWith('.wav')) {
+            if (!layers.find(l => l.id === basename)) {
+                layers.push({ id: basename, name: basename.charAt(0).toUpperCase() + basename.slice(1), icon: 'Music2', volume: 100 });
+            }
+        }
+    });
+
+    return layers.sort((a, b) => {
+        if (a.id === 'original') return -1;
+        if (b.id === 'original') return 1;
+        return a.name.localeCompare(b.name);
+    });
+}

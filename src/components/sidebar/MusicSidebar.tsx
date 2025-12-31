@@ -181,6 +181,7 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
   const handlePlayAll = async (musicUrl: any) => {
     if (!musicUrl.files) return;
     for (const file of musicUrl.files) {
+      if (file.filename === 'original.mp3') continue; // Skip original audio for "Play All"
       const key = `${musicUrl.id}__${file.filename}`;
       if (!playingKeys.has(key)) {
         await handlePlayToggle({ stopPropagation: () => { } }, key, file, musicUrl);
@@ -325,10 +326,13 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                     tabIndex={0}
                     onClick={(e) => {
                       e.stopPropagation();
-                      const allKeys = musicUrl.files?.map((f: any) => `${musicUrl.id}__${f.filename}`) || [];
+                      // Only consider stems for global play/pause (exclude original)
+                      const stemFiles = musicUrl.files?.filter((f: any) => f.filename !== 'original.mp3') || [];
+                      const allKeys = stemFiles.map((f: any) => `${musicUrl.id}__${f.filename}`);
                       const isAnyPlaying = allKeys.some((k: string) => playingKeys.has(k));
+
                       if (isAnyPlaying) {
-                        // Pause all active stems for this song
+                        // Pause all active stems (excluding original) for this song
                         allKeys.forEach((k: string) => {
                           if (playingKeys.has(k)) {
                             const audio = audioPoolRef.current.get(k);
@@ -349,7 +353,7 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                     }}
                     className="flex-shrink-0 p-1 hover:bg-primary/20 rounded transition-colors"
                   >
-                    {musicUrl.files?.some((f: any) => playingKeys.has(`${musicUrl.id}__${f.filename}`)) ? (
+                    {musicUrl.files?.filter((f: any) => f.filename !== 'original.mp3').some((f: any) => playingKeys.has(`${musicUrl.id}__${f.filename}`)) ? (
                       <Pause className="w-3.5 h-3.5 text-primary" />
                     ) : (
                       <Play className="w-3.5 h-3.5 text-muted-foreground" />
