@@ -35,6 +35,15 @@ interface MusicLibraryContextType {
     clearLibrary: () => Promise<void>;
     getPresignedUrl: (songId: string, filename: string) => Promise<string>;
     refreshLibrary: () => Promise<void>;
+    // Playback state and controls
+    playingKeys: Set<string>;
+    pausedKeys: Set<string>;
+    currentTimes: Record<string, number>;
+    durations: Record<string, number>;
+    handlePlayToggle: (key: string, f: any, musicUrl: any) => Promise<void>;
+    handleSeek: (key: string, time: number) => void;
+    stopAllPlayback: () => void;
+    handlePlayAll: (musicUrl: any) => Promise<void>;
 }
 
 const MusicLibraryContext = createContext<MusicLibraryContextType | undefined>(undefined);
@@ -46,6 +55,15 @@ export function MusicLibraryProvider({ children }: { children: ReactNode }) {
     const [urls, setUrls] = useState<MusicUrl[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isInitialized, setIsInitialized] = useState(false);
+
+    // Playback state
+    const audioPoolRef = React.useRef<Map<string, HTMLAudioElement>>(new Map());
+    const [playingKeys, setPlayingKeys] = useState<Set<string>>(new Set());
+    const [pausedKeys, setPausedKeys] = useState<Set<string>>(new Set());
+    const [currentTimes, setCurrentTimes] = useState<Record<string, number>>({});
+    const [durations, setDurations] = useState<Record<string, number>>({});
+
+    const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
     const loadLibrary = async () => {
         try {
@@ -297,6 +315,26 @@ export function MusicLibraryProvider({ children }: { children: ReactNode }) {
                 }
             } catch (e) { }
         }
+
+        // Stop all audio for this song
+        const prefix = `${id}__`;
+        audioPoolRef.current.forEach((audio, key) => {
+            if (key.startsWith(prefix)) {
+                audio.pause();
+                audio.src = "";
+                audioPoolRef.current.delete(key);
+                setPlayingKeys(prev => {
+                    const next = new Set(prev);
+                    next.delete(key);
+                    return next;
+                });
+                setPausedKeys(prev => {
+                    const next = new Set(prev);
+                    next.delete(key);
+                    return next;
+                });
+            }
+        });
     };
 
     const clearLibrary = async () => {
@@ -353,6 +391,107 @@ export function MusicLibraryProvider({ children }: { children: ReactNode }) {
         return data.url;
     };
 
+    const handlePlayToggle = async (key: string, f: any, musicUrl: any) => {
+        try {
+            const audioPool = audioPoolRef.current;
+
+            if (audioPool.has(key)) {
+                const audio = audioPool.get(key);
+                if (audio) {
+                    if (playingKeys.has(key)) {
+                        audio.pause();
+                        setPlayingKeys(prev => {
+                            const next = new Set(prev);
+                            next.delete(key);
+                            return next;
+                        });
+                        setPausedKeys(prev => new Set(prev).add(key));
+                    } else {
+                        await audio.play();
+                        setPausedKeys(prev => {
+                            const next = new Set(prev);
+                            next.delete(key);
+                            return next;
+                        });
+                        setPlayingKeys(prev => new Set(prev).add(key));
+                    }
+                }
+                return;
+            }
+
+            let srcUrl: string | null = null;
+            if (musicUrl.song_id && !f.blobUrl) {
+                srcUrl = await getPresignedUrl(musicUrl.song_id, f.filename);
+            } else if (f.blobUrl) {
+                srcUrl = f.blobUrl;
+            } else if (musicUrl.cacheKey) {
+                srcUrl = `${apiBase}/stems/${musicUrl.cacheKey}/${f.filename}`;
+            }
+
+            if (!srcUrl) throw new Error('No playable source');
+            const audio = new Audio(srcUrl);
+            audio.volume = 1.0;
+
+            const firstPlaying = Array.from(audioPool.values())[0];
+            if (firstPlaying && !firstPlaying.paused) {
+                audio.currentTime = firstPlaying.currentTime;
+            }
+
+            audio.ontimeupdate = () => {
+                setCurrentTimes(prev => ({ ...prev, [key]: audio.currentTime }));
+            };
+
+            audio.onloadedmetadata = () => {
+                setDurations(prev => ({ ...prev, [key]: audio.duration }));
+            };
+
+            audio.onended = () => {
+                audioPool.delete(key);
+                setPlayingKeys(prev => {
+                    const next = new Set(prev);
+                    next.delete(key);
+                    return next;
+                });
+            };
+
+            await audio.play();
+            audioPool.set(key, audio);
+            setPlayingKeys(prev => new Set(prev).add(key));
+        } catch (err) {
+            console.error('Playback failed:', err);
+            throw err;
+        }
+    };
+
+    const handleSeek = (key: string, time: number) => {
+        const audio = audioPoolRef.current.get(key);
+        if (audio) {
+            audio.currentTime = time;
+            setCurrentTimes(prev => ({ ...prev, [key]: time }));
+        }
+    };
+
+    const stopAllPlayback = () => {
+        audioPoolRef.current.forEach(audio => {
+            audio.pause();
+            audio.src = "";
+        });
+        audioPoolRef.current.clear();
+        setPlayingKeys(new Set());
+        setPausedKeys(new Set());
+    };
+
+    const handlePlayAll = async (musicUrl: any) => {
+        if (!musicUrl.files) return;
+        for (const file of musicUrl.files) {
+            if (file.filename === 'original.mp3') continue;
+            const key = `${musicUrl.id}__${file.filename}`;
+            if (!playingKeys.has(key)) {
+                await handlePlayToggle(key, file, musicUrl);
+            }
+        }
+    };
+
     return (
         <MusicLibraryContext.Provider value={{
             urls,
@@ -363,7 +502,15 @@ export function MusicLibraryProvider({ children }: { children: ReactNode }) {
             updateMusicTitle,
             clearLibrary,
             getPresignedUrl,
-            refreshLibrary: loadLibrary
+            refreshLibrary: loadLibrary,
+            playingKeys,
+            pausedKeys,
+            currentTimes,
+            durations,
+            handlePlayToggle,
+            handleSeek,
+            stopAllPlayback,
+            handlePlayAll,
         }}>
             {children}
         </MusicLibraryContext.Provider>

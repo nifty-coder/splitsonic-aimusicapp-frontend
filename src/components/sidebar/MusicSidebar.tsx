@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { ChevronDown, ChevronRight, Music, Volume2, Piano, Drum, Zap, Mic, Music2, Trash2, Loader2, Download, Play, Pause } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMusicLibrary } from "@/hooks/useMusicLibrary";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 
@@ -25,13 +26,22 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
   const [downloadControllers, setDownloadControllers] = useState<Record<string, AbortController | null>>({});
   const [availableFiles, setAvailableFiles] = useState<Record<string, Set<string>>>({});
   const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>({});
-  // Multi-stem playback state
-  const audioPoolRef = useRef<Map<string, HTMLAudioElement>>(new Map());
-  const [playingKeys, setPlayingKeys] = useState<Set<string>>(new Set());
-  const [pausedKeys, setPausedKeys] = useState<Set<string>>(new Set());
-  const [currentTimes, setCurrentTimes] = useState<Record<string, number>>({});
-  const [durations, setDurations] = useState<Record<string, number>>({});
-  const { urls, removeMusicUrl, clearLibrary, updateMusicTitle, getPresignedUrl } = useMusicLibrary();
+  const {
+    urls,
+    removeMusicUrl,
+    clearLibrary,
+    updateMusicTitle,
+    getPresignedUrl,
+    playingKeys,
+    pausedKeys,
+    currentTimes,
+    durations,
+    handlePlayToggle: contextPlayToggle,
+    handleSeek: contextSeek,
+    stopAllPlayback,
+    handlePlayAll
+  } = useMusicLibrary();
+  const { currentUser } = useAuth();
   const { toast } = useToast();
 
   // Auto-refresh caches when library changes
@@ -72,101 +82,19 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
     return fileData;
   };
 
-  // Helper: Play or stop a file preview (multi-stem support)
+  // Wrap handlePlayToggle to stop propagation
   const handlePlayToggle = async (e: any, key: string, f: any, musicUrl: any) => {
     e.stopPropagation();
     try {
-      const audioPool = audioPoolRef.current;
-
-      // If already in pool, handle pause/resume
-      if (audioPool.has(key)) {
-        const audio = audioPool.get(key);
-        if (audio) {
-          if (playingKeys.has(key)) {
-            // Pause
-            audio.pause();
-            setPlayingKeys(prev => {
-              const next = new Set(prev);
-              next.delete(key);
-              return next;
-            });
-            setPausedKeys(prev => new Set(prev).add(key));
-          } else {
-            // Resume
-            await audio.play();
-            setPausedKeys(prev => {
-              const next = new Set(prev);
-              next.delete(key);
-              return next;
-            });
-            setPlayingKeys(prev => new Set(prev).add(key));
-          }
-        }
-        return;
-      }
-
-      // Create and play new audio
-      let srcUrl: string | null = null;
-
-      // Check if this is an R2-stored file (has song_id)
-      if (musicUrl.song_id && !f.blobUrl) {
-        try {
-          srcUrl = await getPresignedUrl(musicUrl.song_id, f.filename);
-        } catch (error) {
-          console.error('Failed to get presigned URL:', error);
-          throw new Error('Failed to load audio file. Please try again.');
-        }
-      } else if (f.blobUrl) {
-        srcUrl = f.blobUrl;
-      } else if (musicUrl.cacheKey) {
-        srcUrl = `${apiBase}/stems/${musicUrl.cacheKey}/${f.filename}`;
-      }
-
-      if (!srcUrl) throw new Error('No playable source');
-      const audio = new Audio(srcUrl);
-
-      // Set volume to 100%
-      audio.volume = 1.0;
-
-      // Sync with other playing audio (if any)
-      const firstPlaying = Array.from(audioPool.values())[0];
-      if (firstPlaying && !firstPlaying.paused) {
-        audio.currentTime = firstPlaying.currentTime;
-      }
-
-      // Update time and duration
-      audio.ontimeupdate = () => {
-        setCurrentTimes(prev => ({ ...prev, [key]: audio.currentTime }));
-      };
-
-      audio.onloadedmetadata = () => {
-        setDurations(prev => ({ ...prev, [key]: audio.duration }));
-      };
-
-      audio.onended = () => {
-        audioPool.delete(key);
-        setPlayingKeys(prev => {
-          const next = new Set(prev);
-          next.delete(key);
-          return next;
-        });
-      };
-
-      await audio.play();
-      audioPool.set(key, audio);
-      setPlayingKeys(prev => new Set(prev).add(key));
+      await contextPlayToggle(key, f, musicUrl);
     } catch (err: any) {
       toast({ title: 'Playback failed', description: err?.message || String(err), variant: 'destructive' });
     }
   };
 
-  // Helper: Handle seek/timestamp change
+  // Use contextSeek
   const handleSeek = (key: string, time: number) => {
-    const audio = audioPoolRef.current.get(key);
-    if (audio) {
-      audio.currentTime = time;
-      setCurrentTimes(prev => ({ ...prev, [key]: time }));
-    }
+    contextSeek(key, time);
   };
 
   // Helper: Format time as MM:SS
@@ -177,26 +105,12 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Helper: Play all stems
-  const handlePlayAll = async (musicUrl: any) => {
-    if (!musicUrl.files) return;
-    for (const file of musicUrl.files) {
-      if (file.filename === 'original.mp3') continue; // Skip original audio for "Play All"
-      const key = `${musicUrl.id}__${file.filename}`;
-      if (!playingKeys.has(key)) {
-        await handlePlayToggle({ stopPropagation: () => { } }, key, file, musicUrl);
-      }
-    }
-  };
-
-  // Helper: Stop/Pause all stems
+  // Use stopAllPlayback from context
   const handleStopAll = () => {
-    audioPoolRef.current.forEach(audio => audio.pause());
-    setPausedKeys(new Set(playingKeys));
-    setPlayingKeys(new Set());
+    stopAllPlayback();
   };
 
-  // Helper: download a file (from blobUrl or by extracting from remote ZIP)
+  // Helper: download a file (from blobUrl or by fetching from remote)
   const handleDownload = async (e: any, key: string, f: any, musicUrl: any) => {
     e.stopPropagation();
     if (downloading[key]) return;
@@ -204,38 +118,44 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
     setDownloadControllers(prev => ({ ...prev, [key]: controller }));
     setDownloading(prev => ({ ...prev, [key]: true }));
     try {
+      let downloadUrl: string | null = null;
+      let headers: HeadersInit = {};
+
       // Check if this is an R2-stored file (has song_id)
       if (musicUrl.song_id && !f.blobUrl) {
-        try {
-          const presignedUrl = await getPresignedUrl(musicUrl.song_id, f.filename);
-          const a = document.createElement('a');
-          a.href = presignedUrl;
-          a.download = f.filename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        } catch (error) {
-          console.error('Failed to get presigned URL for download:', error);
-          throw new Error('Failed to download file. Please try again.');
-        }
+        downloadUrl = await getPresignedUrl(musicUrl.song_id, f.filename);
       } else if (f.blobUrl) {
-        const a = document.createElement('a');
-        a.href = f.blobUrl;
-        a.download = f.filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        downloadUrl = f.blobUrl;
       } else if (musicUrl.cacheKey) {
         // use individual stem endpoint
-        const url = `${apiBase}/stems/${musicUrl.cacheKey}/${f.filename}`;
+        downloadUrl = `${apiBase}/stems/${musicUrl.cacheKey}/${f.filename}`;
+      }
+
+      if (!downloadUrl) {
+        throw new Error('Original uploaded file not available for re-download in this session.');
+      }
+
+      // For local blob URLs, we use fetch to ensure the filename is set correctly in the Blob.
+      // For remote R2 or cache URLs, we avoid fetch to bypass CORS and rely on backend headers.
+      if (f.blobUrl) {
+        const response = await fetch(downloadUrl, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Failed to download: ${response.statusText}`);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = f.filename;
         document.body.appendChild(a);
         a.click();
         a.remove();
+        window.URL.revokeObjectURL(url);
       } else {
-        throw new Error('Original uploaded file not available for re-download in this session.');
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = f.filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
       }
     } catch (err: any) {
       if (err && err.name === 'AbortError') {
@@ -326,27 +246,12 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                     tabIndex={0}
                     onClick={(e) => {
                       e.stopPropagation();
-                      // Only consider stems for global play/pause (exclude original)
                       const stemFiles = musicUrl.files?.filter((f: any) => f.filename !== 'original.mp3') || [];
                       const allKeys = stemFiles.map((f: any) => `${musicUrl.id}__${f.filename}`);
                       const isAnyPlaying = allKeys.some((k: string) => playingKeys.has(k));
 
                       if (isAnyPlaying) {
-                        // Pause all active stems (excluding original) for this song
-                        allKeys.forEach((k: string) => {
-                          if (playingKeys.has(k)) {
-                            const audio = audioPoolRef.current.get(k);
-                            if (audio) {
-                              audio.pause();
-                              setPlayingKeys(prev => {
-                                const next = new Set(prev);
-                                next.delete(k);
-                                return next;
-                              });
-                              setPausedKeys(prev => new Set(prev).add(k));
-                            }
-                          }
-                        });
+                        stopAllPlayback();
                       } else {
                         handlePlayAll(musicUrl);
                       }
@@ -469,14 +374,63 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                           <Button
                             variant="outline"
                             size="sm"
-                            className="w-full text-xs gap-2 py-4 bg-primary/5 border-primary/10 hover:bg-primary/10 text-primary transition-all rounded-xl"
-                            onClick={(e) => {
+                            className="w-full text-xs gap-2 py-4 bg-primary/10 border-primary hover:bg-primary text-white transition-all rounded-xl"
+                            disabled={downloading[`${musicUrl.id}_zip`]}
+                            onClick={async (e) => {
                               e.stopPropagation();
-                              const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-                              window.open(`${base}/cache/${musicUrl.cacheKey}`, '_blank');
+                              const zipKey = `${musicUrl.id}_zip`;
+                              if (downloading[zipKey]) return;
+
+                              setDownloading(prev => ({ ...prev, [zipKey]: true }));
+                              try {
+                                const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                                let downloadUrl: string;
+
+                                if (musicUrl.song_id && !musicUrl.cacheKey) {
+                                  const token = await currentUser?.getIdToken();
+                                  if (!token) throw new Error("Not authenticated");
+                                  downloadUrl = `${base}/songs/${musicUrl.song_id}/zip?token=${token}`;
+
+                                  const response = await fetch(`${base}/songs/${musicUrl.song_id}/zip`, {
+                                    headers: { 'Authorization': `Bearer ${token}` }
+                                  });
+                                  if (!response.ok) throw new Error(`Failed to download ZIP: ${response.statusText}`);
+                                  const blob = await response.blob();
+                                  const url = window.URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `${musicUrl.title || 'archive'}.zip`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  a.remove();
+                                  window.URL.revokeObjectURL(url);
+                                } else {
+                                  downloadUrl = `${base}/cache/${musicUrl.cacheKey}`;
+                                  // Direct link to avoid CORS for the public cache endpoint. 
+                                  // Backend serves with Content-Disposition: attachment.
+                                  const a = document.createElement('a');
+                                  a.href = downloadUrl;
+                                  a.download = `${musicUrl.title || 'archive'}.zip`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  a.remove();
+                                }
+                              } catch (err: any) {
+                                toast({
+                                  title: 'Download failed',
+                                  description: err?.message || String(err),
+                                  variant: 'destructive'
+                                });
+                              } finally {
+                                setDownloading(prev => ({ ...prev, [zipKey]: false }));
+                              }
                             }}
                           >
-                            <Download className="w-3.5 h-3.5" />
+                            {downloading[`${musicUrl.id}_zip`] ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Download className="w-3.5 h-3.5" />
+                            )}
                             Download Complete ZIP Archive
                           </Button>
                         </div>
