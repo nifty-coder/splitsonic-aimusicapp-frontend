@@ -30,7 +30,7 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
   const [playingKeys, setPlayingKeys] = useState<Set<string>>(new Set());
   const [currentTimes, setCurrentTimes] = useState<Record<string, number>>({});
   const [durations, setDurations] = useState<Record<string, number>>({});
-  const { urls, removeMusicUrl, clearLibrary, updateMusicTitle, scheduleRemoveMusicUrl, undoRemoveMusicUrl, scheduleClearLibrary, undoClearLibrary, getPresignedUrl } = useMusicLibrary();
+  const { urls, removeMusicUrl, clearLibrary, updateMusicTitle, getPresignedUrl } = useMusicLibrary();
   const { toast } = useToast();
 
   // Auto-refresh caches when library changes
@@ -249,17 +249,12 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
               size="sm"
               variant="ghost"
               className="text-destructive"
-              onClick={() => {
+              onClick={async () => {
                 try {
-                  scheduleClearLibrary();
+                  await clearLibrary();
                   toast({
                     title: 'Library cleared',
-                    description: 'All items removed. Undo?',
-                    action: (
-                      <button className="text-sm underline" onClick={() => undoClearLibrary()}>
-                        Undo
-                      </button>
-                    )
+                    description: 'All items have been removed.',
                   });
                 } catch (err: any) {
                   toast({ title: 'Error', description: err?.message || 'Failed to clear library', variant: 'destructive' });
@@ -315,18 +310,13 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                   <span
                     role="button"
                     tabIndex={0}
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation();
                       try {
-                        scheduleRemoveMusicUrl(musicUrl.id);
+                        await removeMusicUrl(musicUrl.id);
                         toast({
                           title: 'Item deleted',
-                          description: 'The item has been removed. Undo?',
-                          action: (
-                            <button className="text-sm underline" onClick={() => undoRemoveMusicUrl(musicUrl.id)}>
-                              Undo
-                            </button>
-                          )
+                          description: 'The item has been removed.',
                         });
                       } catch (err: any) {
                         toast({ title: 'Error', description: err?.message || 'Failed to delete item', variant: 'destructive' });
@@ -451,6 +441,6 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
           })}
         </div>
       </div>
-    </div>
+    </div >
   );
 }

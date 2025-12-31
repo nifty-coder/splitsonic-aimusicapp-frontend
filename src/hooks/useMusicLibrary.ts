@@ -35,8 +35,6 @@ export function useMusicLibrary() {
   const [urls, setUrls] = useState<MusicUrl[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-  const pendingDeletes = { current: new Map<string, { item: MusicUrl; timer: ReturnType<typeof setTimeout> }>() } as { current: Map<string, { item: MusicUrl; timer: ReturnType<typeof setTimeout> }> };
-  const pendingClear = { current: null as null | { items: MusicUrl[]; timer: ReturnType<typeof setTimeout> } } as { current: null | { items: MusicUrl[]; timer: ReturnType<typeof setTimeout> } };
 
   // Load from localStorage and R2 on mount
   useEffect(() => {
@@ -271,141 +269,85 @@ export function useMusicLibrary() {
     }
   };
 
-  const removeMusicUrl = (id: string) => {
+  const removeMusicUrl = async (id: string) => {
+    const itemToRemove = urls.find(u => u.id === id);
+    if (!itemToRemove) return;
+
+    // Filter from state immediately
     setUrls(prev => prev.filter(url => url.id !== id));
-    // revoking blob URLs
-    const removed = urls.find(u => u.id === id);
-    if (removed && removed.files) {
-      removed.files.forEach(f => { if (f.blobUrl) URL.revokeObjectURL(f.blobUrl); });
-    }
-  };
 
-  const finalizeRemoveMusicUrl = async (id: string) => {
-    try {
-      const entry = pendingDeletes.current.get(id);
-      if (!entry) return;
-
-      // If it's an R2 song, delete from backend
-      if (entry.item.song_id) {
-        try {
-          const user = auth.currentUser;
-          if (user) {
-            const token = await user.getIdToken();
-            const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-            await fetch(`${base}/songs/${entry.item.song_id}`, {
-              method: 'DELETE',
-              headers: {
-                'Authorization': `Bearer ${token}`
-              }
-            });
-            console.log(`Successfully deleted song ${entry.item.song_id} from R2`);
-          }
-        } catch (e) {
-          console.error(`Failed to delete song ${entry.item.song_id} from R2:`, e);
+    // Revoke blob URLs
+    if (itemToRemove.files) {
+      itemToRemove.files.forEach(f => {
+        if (f.blobUrl) {
+          try { URL.revokeObjectURL(f.blobUrl); } catch { }
         }
-      }
-
-      // Revoke blob URLs from removed item
-      if (entry.item && entry.item.files) {
-        for (const f of entry.item.files) {
-          try { if (f.blobUrl) URL.revokeObjectURL(f.blobUrl); } catch { };
-        }
-      }
-      pendingDeletes.current.delete(id);
-    } catch (e) {
-      // noop
+      });
     }
-  };
 
-  const scheduleRemoveMusicUrl = (id: string, ttl = 10000) => {
-    const found = urls.find(u => u.id === id);
-    if (!found) return;
-    setUrls(prev => prev.filter(u => u.id !== id));
-
-    // store pending delete with timer
-    const timer = setTimeout(() => finalizeRemoveMusicUrl(id), ttl);
-    pendingDeletes.current.set(id, { item: found, timer });
-  };
-
-  const undoRemoveMusicUrl = (id: string) => {
-    const entry = pendingDeletes.current.get(id);
-    if (!entry) return;
-    clearTimeout(entry.timer);
-    pendingDeletes.current.delete(id);
-    setUrls(prev => {
-      const next = [entry.item, ...prev];
+    // If it's an R2 song, delete from backend immediately
+    if (itemToRemove.song_id) {
       try {
-        const sanitized = next.map(u => ({
-          ...u,
-          files: u.files ? u.files.map(f => ({ filename: f.filename })) : undefined
-        }));
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
-      } catch { }
-      return next;
-    });
+        const user = auth.currentUser;
+        if (user) {
+          const token = await user.getIdToken();
+          const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+          await fetch(`${base}/songs/${itemToRemove.song_id}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          console.log(`Successfully deleted song ${itemToRemove.song_id} from R2`);
+        }
+      } catch (e) {
+        console.error(`Failed to delete song ${itemToRemove.song_id} from R2:`, e);
+      }
+    }
+  };
+
+  const clearLibrary = async () => {
+    const items = [...urls];
+
+    // Clear state and local storage immediately
+    setUrls([]);
+    localStorage.removeItem(STORAGE_KEY);
+
+    // Finalize: delete R2 items if authenticated
+    const hasR2Items = items.some(u => u.song_id);
+    if (hasR2Items) {
+      try {
+        const user = auth.currentUser;
+        if (user) {
+          const token = await user.getIdToken();
+          const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+          await fetch(`${base}/songs`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          console.log('Successfully cleared all R2 songs');
+        }
+      } catch (e) {
+        console.error('Failed to clear R2 songs:', e);
+      }
+    }
+
+    // Finalize: revoke any blob URLs
+    try {
+      for (const u of items) {
+        if (u.files) {
+          for (const f of u.files) {
+            try { if (f.blobUrl) URL.revokeObjectURL(f.blobUrl); } catch { };
+          }
+        }
+      }
+    } catch { }
   };
 
   const updateMusicTitle = (id: string, newTitle: string) => {
     setUrls(prev => prev.map(u => u.id === id ? { ...u, title: newTitle } : u));
-  };
-
-  const clearLibrary = () => {
-    // Schedule clear with undo window: move all items into pendingClear
-    try {
-      const items = [...urls];
-      setUrls([]);
-      localStorage.removeItem(STORAGE_KEY);
-      const timer = setTimeout(async () => {
-        // finalize: delete R2 items if authenticated
-        const hasR2Items = items.some(u => u.song_id);
-        if (hasR2Items) {
-          try {
-            const user = auth.currentUser;
-            if (user) {
-              const token = await user.getIdToken();
-              const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-              await fetch(`${base}/songs`, {
-                method: 'DELETE',
-                headers: {
-                  'Authorization': `Bearer ${token}`
-                }
-              });
-              console.log('Successfully cleared all R2 songs');
-            }
-          } catch (e) {
-            console.error('Failed to clear R2 songs:', e);
-          }
-        }
-
-        // finalize: revoke any blob URLs
-        try {
-          for (const u of items) {
-            if (u.files) {
-              for (const f of u.files) {
-                try { if (f.blobUrl) URL.revokeObjectURL(f.blobUrl); } catch { };
-              }
-            }
-          }
-        } catch { }
-        pendingClear.current = null;
-      }, 10000);
-      pendingClear.current = { items, timer };
-    } catch (e) {
-      setUrls([]);
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  };
-
-  const undoClearLibrary = () => {
-    if (!pendingClear.current) return;
-    const { items, timer } = pendingClear.current;
-    clearTimeout(timer);
-    pendingClear.current = null;
-    setUrls(items);
-    try {
-      const sanitized = items.map(u => ({ ...u, files: u.files ? u.files.map(f => ({ filename: f.filename })) : undefined }));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
-    } catch { }
   };
 
   // Helper function to get presigned URL for R2 files
@@ -441,10 +383,6 @@ export function useMusicLibrary() {
     addAudioFile,
     removeMusicUrl,
     updateMusicTitle,
-    scheduleRemoveMusicUrl,
-    undoRemoveMusicUrl,
-    scheduleClearLibrary: clearLibrary,
-    undoClearLibrary,
     clearLibrary,
     getPresignedUrl
   };
