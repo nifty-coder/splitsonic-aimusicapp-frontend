@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronDown, ChevronRight, Music, Volume2, Piano, Drum, Zap, Mic, Music2, Trash2, Loader2, Download } from "lucide-react";
+import { ChevronDown, ChevronRight, Music, Volume2, Piano, Drum, Zap, Mic, Music2, Trash2, Loader2, Download, Play, Pause } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMusicLibrary } from "@/hooks/useMusicLibrary";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
   // Multi-stem playback state
   const audioPoolRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const [playingKeys, setPlayingKeys] = useState<Set<string>>(new Set());
+  const [pausedKeys, setPausedKeys] = useState<Set<string>>(new Set());
   const [currentTimes, setCurrentTimes] = useState<Record<string, number>>({});
   const [durations, setDurations] = useState<Record<string, number>>({});
   const { urls, removeMusicUrl, clearLibrary, updateMusicTitle, getPresignedUrl } = useMusicLibrary();
@@ -77,18 +78,30 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
     try {
       const audioPool = audioPoolRef.current;
 
-      // If already playing, pause and remove
-      if (playingKeys.has(key)) {
+      // If already in pool, handle pause/resume
+      if (audioPool.has(key)) {
         const audio = audioPool.get(key);
         if (audio) {
-          audio.pause();
-          audioPool.delete(key);
+          if (playingKeys.has(key)) {
+            // Pause
+            audio.pause();
+            setPlayingKeys(prev => {
+              const next = new Set(prev);
+              next.delete(key);
+              return next;
+            });
+            setPausedKeys(prev => new Set(prev).add(key));
+          } else {
+            // Resume
+            await audio.play();
+            setPausedKeys(prev => {
+              const next = new Set(prev);
+              next.delete(key);
+              return next;
+            });
+            setPlayingKeys(prev => new Set(prev).add(key));
+          }
         }
-        setPlayingKeys(prev => {
-          const next = new Set(prev);
-          next.delete(key);
-          return next;
-        });
         return;
       }
 
@@ -168,17 +181,17 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
   const handlePlayAll = async (musicUrl: any) => {
     if (!musicUrl.files) return;
     for (const file of musicUrl.files) {
-      const key = `${musicUrl.id}-${file.filename}`;
+      const key = `${musicUrl.id}__${file.filename}`;
       if (!playingKeys.has(key)) {
         await handlePlayToggle({ stopPropagation: () => { } }, key, file, musicUrl);
       }
     }
   };
 
-  // Helper: Stop all stems
+  // Helper: Stop/Pause all stems
   const handleStopAll = () => {
     audioPoolRef.current.forEach(audio => audio.pause());
-    audioPoolRef.current.clear();
+    setPausedKeys(new Set(playingKeys));
     setPlayingKeys(new Set());
   };
 
@@ -297,7 +310,7 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between gap-2">
                       <h3 className="font-medium text-foreground text-sm">
                         {titleOverrides[musicUrl.id] || musicUrl.title}
                       </h3>
@@ -306,6 +319,42 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                       {musicUrl.addedAt.toLocaleDateString()}
                     </p>
                   </div>
+
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const allKeys = musicUrl.files?.map((f: any) => `${musicUrl.id}__${f.filename}`) || [];
+                      const isAnyPlaying = allKeys.some((k: string) => playingKeys.has(k));
+                      if (isAnyPlaying) {
+                        // Pause all active stems for this song
+                        allKeys.forEach((k: string) => {
+                          if (playingKeys.has(k)) {
+                            const audio = audioPoolRef.current.get(k);
+                            if (audio) {
+                              audio.pause();
+                              setPlayingKeys(prev => {
+                                const next = new Set(prev);
+                                next.delete(k);
+                                return next;
+                              });
+                              setPausedKeys(prev => new Set(prev).add(k));
+                            }
+                          }
+                        });
+                      } else {
+                        handlePlayAll(musicUrl);
+                      }
+                    }}
+                    className="flex-shrink-0 p-1 hover:bg-primary/20 rounded transition-colors"
+                  >
+                    {musicUrl.files?.some((f: any) => playingKeys.has(`${musicUrl.id}__${f.filename}`)) ? (
+                      <Pause className="w-3.5 h-3.5 text-primary" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5 text-muted-foreground" />
+                    )}
+                  </span>
 
                   <span
                     role="button"
@@ -370,10 +419,11 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                                         onClick={(e) => handlePlayToggle(e, trackKey, f, musicUrl)}
                                         className={cn(
                                           "p-1.5 rounded-md transition-all",
-                                          isPlaying ? "bg-primary/20 text-primary" : "hover:bg-primary/10 text-muted-foreground"
+                                          isPlaying ? "bg-primary/20 text-primary" : "hover:bg-primary/10 text-muted-foreground",
+                                          pausedKeys.has(trackKey) && "bg-yellow-500/10 text-yellow-500"
                                         )}
                                       >
-                                        {isPlaying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Volume2 className="w-3.5 h-3.5" />}
+                                        {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                                       </button>
                                       <button
                                         onClick={(e) => handleDownload(e, trackKey, f, musicUrl)}
@@ -387,7 +437,7 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                                 </div>
                               </div>
 
-                              {isPlaying && (
+                              {(isPlaying || pausedKeys.has(trackKey)) && (
                                 <div className="mt-2 flex items-center gap-2 px-1">
                                   <span className="text-xs text-muted-foreground w-10 text-left">
                                     {formatTime(currentTimes[trackKey] || 0)}
@@ -435,7 +485,8 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                       )}
                     </div>
                   </div>
-                )}
+                )
+                }
               </div>
             );
           })}

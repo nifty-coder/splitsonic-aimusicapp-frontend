@@ -66,7 +66,7 @@ export const useProfileAPI = () => {
       };
 
       console.log('Creating profile for user:', currentUser.uid);
-      
+
       const response = await apiService.createProfile(newProfileData);
 
       if (response.success && response.data) {
@@ -78,7 +78,7 @@ export const useProfileAPI = () => {
           } else {
             localStorage.removeItem('user-profile-picture');
           }
-        } catch (e) {}
+        } catch (e) { }
       } else {
         console.error('Error creating profile:', response.error);
         setError(response.error || 'Failed to create profile');
@@ -107,7 +107,7 @@ export const useProfileAPI = () => {
           } else {
             localStorage.removeItem('user-profile-picture');
           }
-        } catch (e) {}
+        } catch (e) { }
         return response.data;
       } else {
         console.error('Error updating profile:', response.error);

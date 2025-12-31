@@ -9,7 +9,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Sparkles, Music, Upload, AlertCircle, FileAudio, CheckCircle2, X } from "lucide-react";
+import { Sparkles, Music, Upload, AlertCircle, FileAudio, CheckCircle2, X, Mic, Drum, Zap, Music2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMusicLibrary } from "@/hooks/useMusicLibrary";
 import { useToast } from "@/hooks/use-toast";
@@ -27,6 +27,7 @@ export function HeroSection() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [tosAgreed, setTosAgreed] = useState(false);
+  const [selectedStems, setSelectedStems] = useState<string[]>(['vocals', 'drums', 'bass', 'other', 'instrumental']);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -59,7 +60,7 @@ export function HeroSection() {
     if (!selectedFile) return;
 
     if (!tosAgreed) {
-      toast({ title: 'Terms of Service', description: 'You must agree to the Terms of Service before analyzing.', variant: 'destructive' });
+      toast({ title: 'Terms of Service', description: 'You must agree to the Terms of Service before splitting.', variant: 'destructive' });
       return;
     }
 
@@ -86,7 +87,7 @@ export function HeroSection() {
     }, 1000);
 
     try {
-      await addAudioFile(selectedFile, tosAgreed);
+      await addAudioFile(selectedFile, tosAgreed, selectedStems);
       setUploadProgress(100);
       toast({ title: 'Success', description: 'Audio file analyzed and added to library.' });
       setSelectedFile(null); // Clear selection on success
@@ -182,7 +183,7 @@ export function HeroSection() {
                   {/* Analyze Button */}
                   <Button
                     onClick={handleAnalyze}
-                    disabled={!selectedFile || uploadLoading || (!tosAgreed && !!selectedFile)}
+                    disabled={!selectedFile || uploadLoading || (!tosAgreed && !!selectedFile) || selectedStems.length === 0}
                     size="lg"
                     className={cn(
                       "h-14 px-8 min-w-[160px] rounded-xl font-semibold shadow-glow transition-all duration-300",
@@ -193,12 +194,12 @@ export function HeroSection() {
                     {uploadLoading ? (
                       <>
                         <Sparkles className="w-5 h-5 mr-2 animate-spin" />
-                        Analyzing
+                        Splitting
                       </>
                     ) : (
                       <>
                         <Sparkles className="w-5 h-5 mr-2" />
-                        Analyze
+                        Split
                       </>
                     )}
                   </Button>
@@ -208,7 +209,7 @@ export function HeroSection() {
                 {uploadLoading && (
                   <div className="w-full space-y-2 animate-in fade-in">
                     <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>Analyzing {selectedFile?.name}...</span>
+                      <span>Splitting {selectedFile?.name}...</span>
                       <span>{Math.round(uploadProgress)}%</span>
                     </div>
                     <div className="h-1.5 w-full bg-secondary/50 rounded-full overflow-hidden">
@@ -217,6 +218,89 @@ export function HeroSection() {
                         style={{ width: `${uploadProgress}%` }}
                       />
                     </div>
+                  </div>
+                )}
+
+                {/* Stem Selection Section */}
+                {selectedFile && !uploadLoading && (
+                  <div className="w-full space-y-4 p-4 rounded-xl bg-background/30 border border-border/20 animate-slide-up">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                        <Music className="w-4 h-4 text-primary" />
+                        Select Stems to Extract
+                      </h3>
+                      <button
+                        onClick={() => {
+                          if (selectedStems.length === 5) setSelectedStems([]);
+                          else setSelectedStems(['vocals', 'drums', 'bass', 'other', 'instrumental']);
+                        }}
+                        className="text-xs uppercase tracking-wider font-bold text-white hover:opacity-80 transition-opacity"
+                      >
+                        {selectedStems.length === 5 ? 'Deselect All' : 'Select All'}
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap gap-3">
+                      {[
+                        { id: 'vocals', label: 'Vocals', icon: Mic },
+                        { id: 'drums', label: 'Drums', icon: Drum },
+                        { id: 'bass', label: 'Bass', icon: Volume2 },
+                        { id: 'other', label: 'Other', icon: Zap },
+                        { id: 'instrumental', label: 'Instrumental', icon: Music2 },
+                      ].map((stem) => {
+                        const isSelected = selectedStems.includes(stem.id);
+                        const Icon = stem.icon;
+                        return (
+                          <button
+                            key={stem.id}
+                            onClick={() => {
+                              setSelectedStems(prev =>
+                                isSelected
+                                  ? prev.filter(s => s !== stem.id)
+                                  : [...prev, stem.id]
+                              );
+                            }}
+                            className={cn(
+                              "group/stem relative flex flex-col items-center justify-center gap-2 p-4 min-w-[100px] flex-1 rounded-xl border-2 transition-all duration-300",
+                              isSelected
+                                ? "bg-primary/10 border-primary shadow-[0_0_15px_rgba(var(--primary),0.2)]"
+                                : "bg-background/20 border-border/40 text-muted-foreground hover:border-border/80 hover:bg-background/40"
+                            )}
+                          >
+                            <div className={cn(
+                              "p-2 rounded-lg transition-all duration-300",
+                              isSelected
+                                ? "bg-primary text-primary-foreground scale-110 shadow-glow-sm"
+                                : "bg-muted/30 text-muted-foreground group-hover/stem:bg-muted/50"
+                            )}>
+                              <Icon className="w-5 h-5" />
+                            </div>
+                            <span className={cn(
+                              "text-[11px] font-bold tracking-wide uppercase transition-colors",
+                              isSelected ? "text-foreground" : "text-muted-foreground"
+                            )}>
+                              {stem.label}
+                            </span>
+
+                            {/* Selected Indicator */}
+                            <div className={cn(
+                              "absolute top-2 right-2 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all duration-300",
+                              isSelected
+                                ? "bg-primary border-primary scale-100"
+                                : "bg-transparent border-muted-foreground/30 scale-75 opacity-0 group-hover/stem:opacity-100"
+                            )}>
+                              {isSelected && <CheckCircle2 className="w-3 h-3 text-primary-foreground" />}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {selectedStems.length === 0 && (
+                      <p className="text-[10px] text-destructive flex items-center gap-1 animate-pulse">
+                        <AlertCircle className="w-3 h-3" />
+                        Please select at least one stem.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -297,7 +381,7 @@ export function HeroSection() {
 
               <div className="text-sm text-muted-foreground text-center max-w-lg mx-auto leading-relaxed">
                 <strong>Note:</strong> AI generation may not always be 100% accurate.
-                Analyzing high-quality files may take up to 5 minutes.
+                Splitting high-quality files may take up to 5 minutes.
               </div>
             </div>
 

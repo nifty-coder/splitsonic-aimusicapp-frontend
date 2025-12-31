@@ -139,7 +139,7 @@ export function useMusicLibrary() {
     }
   }, [urls, isInitialized]);
 
-  const addAudioFile = async (file: File, tosAgreed: boolean): Promise<MusicUrl> => {
+  const addAudioFile = async (file: File, tosAgreed: boolean, stems?: string[]): Promise<MusicUrl> => {
     setIsLoading(true);
     try {
       if (!tosAgreed) {
@@ -149,6 +149,9 @@ export function useMusicLibrary() {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('tos_agreed', 'true');
+      if (stems && stems.length > 0) {
+        formData.append('stems', stems.join(','));
+      }
 
       // Get reCAPTCHA token if site key is configured
       const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
