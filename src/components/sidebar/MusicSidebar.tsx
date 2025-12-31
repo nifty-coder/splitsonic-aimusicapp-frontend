@@ -28,7 +28,8 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
   // Multi-stem playback state
   const audioPoolRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const [playingKeys, setPlayingKeys] = useState<Set<string>>(new Set());
-  const [stemVolumes, setStemVolumes] = useState<Record<string, number>>({});
+  const [currentTimes, setCurrentTimes] = useState<Record<string, number>>({});
+  const [durations, setDurations] = useState<Record<string, number>>({});
   const { urls, removeMusicUrl, clearLibrary, updateMusicTitle, scheduleRemoveMusicUrl, undoRemoveMusicUrl, scheduleClearLibrary, undoClearLibrary } = useMusicLibrary();
   const { toast } = useToast();
 
@@ -102,14 +103,23 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
       if (!srcUrl) throw new Error('No playable source');
       const audio = new Audio(srcUrl);
 
-      // Set volume from state (default 100%)
-      audio.volume = (stemVolumes[key] ?? 100) / 100;
+      // Set volume to 100%
+      audio.volume = 1.0;
 
       // Sync with other playing audio (if any)
       const firstPlaying = Array.from(audioPool.values())[0];
       if (firstPlaying && !firstPlaying.paused) {
         audio.currentTime = firstPlaying.currentTime;
       }
+
+      // Update time and duration
+      audio.ontimeupdate = () => {
+        setCurrentTimes(prev => ({ ...prev, [key]: audio.currentTime }));
+      };
+
+      audio.onloadedmetadata = () => {
+        setDurations(prev => ({ ...prev, [key]: audio.duration }));
+      };
 
       audio.onended = () => {
         audioPool.delete(key);
@@ -128,15 +138,21 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
     }
   };
 
-  // Helper: Handle volume change for a stem
-  const handleVolumeChange = (key: string, volume: number) => {
-    setStemVolumes(prev => ({ ...prev, [key]: volume }));
-
-    // Update live audio if playing
+  // Helper: Handle seek/timestamp change
+  const handleSeek = (key: string, time: number) => {
     const audio = audioPoolRef.current.get(key);
     if (audio) {
-      audio.volume = volume / 100;
+      audio.currentTime = time;
+      setCurrentTimes(prev => ({ ...prev, [key]: time }));
     }
+  };
+
+  // Helper: Format time as MM:SS
+  const formatTime = (seconds: number) => {
+    if (!seconds || isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   // Helper: Play all stems
@@ -360,16 +376,20 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
 
                               {isPlaying && (
                                 <div className="mt-2 flex items-center gap-2 px-1">
-                                  <Volume2 className="w-3 h-3 text-muted-foreground" />
+                                  <span className="text-xs text-muted-foreground w-10 text-left">
+                                    {formatTime(currentTimes[trackKey] || 0)}
+                                  </span>
                                   <input
                                     type="range"
                                     min="0"
-                                    max="100"
-                                    value={stemVolumes[trackKey] ?? 100}
-                                    onChange={(e) => handleVolumeChange(trackKey, Number(e.target.value))}
-                                    className="flex-1 h-1 bg-muted rounded-lg appearance-none cursor-pointer"
+                                    max={durations[trackKey] || 100}
+                                    value={currentTimes[trackKey] || 0}
+                                    onChange={(e) => handleSeek(trackKey, Number(e.target.value))}
+                                    className="flex-1 h-1 bg-muted rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary"
                                   />
-                                  <span className="text-xs text-muted-foreground w-8 text-right">{stemVolumes[trackKey] ?? 100}%</span>
+                                  <span className="text-xs text-muted-foreground w-10 text-right">
+                                    {formatTime(durations[trackKey] || 0)}
+                                  </span>
                                 </div>
                               )}
                             </div>

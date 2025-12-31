@@ -43,7 +43,7 @@ export function useMusicLibrary() {
         const urlsWithDates = parsed.map((url: any) => ({
           ...url,
           addedAt: new Date(url.addedAt),
-          layers: (url.layers && url.layers.length > 0) ? url.layers : (url.files ? generateLayersFromFiles(url.files) : [])
+          layers: ((url.layers && url.layers.length > 0) ? url.layers : (url.files ? generateLayersFromFiles(url.files) : [])).sort((a: any, b: any) => a.name.localeCompare(b.name))
         }));
         setUrls(urlsWithDates);
       }
@@ -308,7 +308,8 @@ function generateLayersFromFiles(files: { filename: string; blobUrl?: string }[]
     }
   });
 
-  return layers;
+  // Sort layers alphabetically by name
+  return layers.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 
