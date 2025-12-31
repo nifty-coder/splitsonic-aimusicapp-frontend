@@ -38,6 +38,12 @@ export function HeroSection() {
       return;
     }
 
+    if (!f.name.toLowerCase().endsWith('.mp3')) {
+      toast({ title: 'Error', description: 'Only MP3 files are accepted', variant: 'destructive' });
+      e.target.value = '';
+      return;
+    }
+
     setSelectedFile(f);
     setUploadProgress(0);
     // Reset file input value so same file can be selected again if needed
@@ -136,7 +142,7 @@ export function HeroSection() {
                       <div className="relative w-full">
                         <input
                           type="file"
-                          accept="audio/*"
+                          accept=".mp3"
                           id="audioUpload"
                           onChange={handleFileSelect}
                           className="hidden"
@@ -151,7 +157,7 @@ export function HeroSection() {
                           )}
                         >
                           <Upload className="w-5 h-5 mb-0.5" />
-                          <span>Click to Select Audio File</span>
+                          <span>Select MP3 File</span>
                         </label>
                       </div>
                     ) : (
@@ -255,10 +261,18 @@ export function HeroSection() {
                             </p>
                             <p>
                               <strong>3. Data Retention</strong><br />
-                              Uploaded files are processed temporarily. While we may cache results for your convenience, we are not a long-term storage provider. Please keep your own backups.
+                              Authenticated users' files are stored in private Cloudflare R2 storage and are automatically deleted after 24 hours. Local files are processed in your browser session and not stored by us.
                             </p>
                             <p>
-                              <strong>4. Prohibited Content</strong><br />
+                              <strong>4. Bot Detection</strong><br />
+                              This site is protected by reCAPTCHA v3 to prevent automated abuse. Your use of reCAPTCHA is subject to the Google <a href="https://policies.google.com/privacy" target="_blank" className="underline">Privacy Policy</a> and <a href="https://policies.google.com/terms" target="_blank" className="underline">Terms of Service</a>.
+                            </p>
+                            <p>
+                              <strong>5. Storage & Privacy</strong><br />
+                              We use secure, private Cloudflare R2 buckets. Only you can access your analyzed files via secure, time-limited links.
+                            </p>
+                            <p>
+                              <strong>6. Prohibited Content</strong><br />
                               Do not upload illegal, harmful, or offensive content. We reserve the right to terminate services for violations.
                             </p>
                           </div>
