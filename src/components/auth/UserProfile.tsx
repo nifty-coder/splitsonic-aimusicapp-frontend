@@ -12,7 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { LogOut, User } from 'lucide-react';
+import { LogOut, User, Star } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 export const UserProfile: React.FC = () => {
@@ -78,6 +78,10 @@ export const UserProfile: React.FC = () => {
         <DropdownMenuItem onClick={() => navigate('/profile')}>
           <User className="mr-2 h-4 w-4" />
           <span>Profile</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => navigate('/pricing')}>
+          <Star className="mr-2 h-4 w-4" />
+          <span>Pricing</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={handleLogout}>

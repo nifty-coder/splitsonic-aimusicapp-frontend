@@ -114,7 +114,7 @@ export function HeroSection() {
               alt="SplitSonic Logo"
               className="w-18 h-16 object-contain"
             />
-            <h1 className="text-3xl md:text-4xl lg:text-6xl font-bold">
+            <h1 className="text-3xl md:text-4xl lg:text-6xl font-bold text-transparent bg-clip-text bg-gradient-primary">
               SplitSonic
             </h1>
           </div>

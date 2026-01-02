@@ -112,81 +112,60 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     try {
       const cred = await signInWithPopup(auth, provider);
-      const additionalInfo = getAdditionalUserInfo(cred);
-      const isNewUser = additionalInfo?.isNewUser;
-
-      const email = cred.user.email || (additionalInfo?.profile as any)?.email;
-
-      console.log('Google Auth Discovery:', {
-        uid: cred.user.uid,
-        extractedEmail: email,
-        profileEmail: (additionalInfo?.profile as any)?.email,
-        isNewUser
-      });
+      const email = cred.user.email;
 
       if (!email) {
-        console.warn('Blocking login: No email found in Google credential.');
         await signOut(auth);
         throw new Error('We could not retrieve an email address from your Google account.');
       }
 
-      if (email) {
-        console.log(`Verifying account status for: ${email}`);
-        const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+      // Check for existing sign-in methods for this email
+      const methods = await fetchSignInMethodsForEmail(auth, email);
+      const hasPasswordMethod = methods.includes('password');
 
-        try {
-          const res = await fetch(`${base}/api/check-password-user?email=${encodeURIComponent(email)}`);
-          if (!res.ok) {
-            console.error('Account check API returned error:', res.status);
-            throw new Error('VERIFICATION_SERVICE_ERROR');
+      if (hasPasswordMethod) {
+        // If they have a password account, we don't want them using Google 
+        // unless they are already linked (which they won't be if methods.length > 1 and it's a conflict case)
+        // Actually, if they have a password account and just signed in with Google, 
+        // Firebase might have linked them if "Link accounts" is on.
+        // We want to force them to use password if they started with it.
+
+        const additionalInfo = getAdditionalUserInfo(cred);
+        const isNewUser = additionalInfo?.isNewUser;
+
+        console.log('Auth Conflict Detected:', { email, methods, isNewUser });
+
+        // If it's a new Google "user" (new link/account) but email already has password
+        // we block it and sign out.
+        await signOut(auth);
+
+        if (isNewUser) {
+          try {
+            await deleteUser(cred.user);
+          } catch (e) {
+            console.error('Failed to cleanup duplicate user:', e);
           }
-
-          const data = await res.json();
-          console.log('Backend provider check results:', data);
-
-          if (data.has_password) {
-            console.log('Conflict confirmed: Email has a password account. Cleaning up session.');
-
-            if (isNewUser) {
-              try {
-                await deleteUser(cred.user);
-                console.log('Duplicate Google user deleted.');
-              } catch (delErr) {
-                console.error('Failed to delete duplicate user:', delErr);
-              }
-            }
-
-            await signOut(auth);
-            throw new Error('CONFLICT_PASSWORD_EXISTS');
-          }
-        } catch (checkErr: any) {
-          // If it's our own conflict error, rethrow it
-          if (checkErr.message === 'CONFLICT_PASSWORD_EXISTS') throw checkErr;
-
-          // For any other error (fetch error, 500 status, etc.), we MUST sign out for safety
-          console.error('Account verification failed. Signing out for safety.', checkErr);
-          await signOut(auth);
-
-          if (checkErr.message === 'VERIFICATION_SERVICE_ERROR') {
-            throw new Error('We couldn\'t verify your account status. Please try again in a moment.');
-          }
-          throw new Error('An error occurred during verification. Please use your password if this persists.');
         }
+
+        throw new Error('CONFLICT_PASSWORD_EXISTS');
       }
 
-      if (isNewUser) {
+      // If no password conflict, proceed
+      const additionalInfo = getAdditionalUserInfo(cred);
+      if (additionalInfo?.isNewUser) {
         try {
           localStorage.removeItem('music-analyzer-library');
         } catch (e) { }
       }
+
       return cred;
     } catch (err: any) {
       if (err.message === 'CONFLICT_PASSWORD_EXISTS') {
-        throw new Error('This email is linked to a password account. Please sign in with your email and password.');
+        throw new Error('This email is already linked to a password account. Please sign in with your email and password.');
       }
 
       if (err.code === 'auth/account-exists-with-different-credential') {
-        throw new Error('This email is linked to a different sign-in method. Please use your existing account.');
+        throw new Error('This email is already linked to a different sign-in method. Please use your existing account.');
       }
 
       throw new Error(getFriendlyErrorMessage(err));

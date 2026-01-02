@@ -12,6 +12,7 @@ import Auth from "./pages/Auth";
 import Profile from "./pages/Profile";
 import GoogleAuthVerify from "./pages/GoogleAuthVerify";
 import ActivationPage from "./pages/ActivationPage";
+import Pricing from "./pages/Pricing";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -51,6 +52,7 @@ const App = () => (
               />
               <Route path="/google-auth-verify" element={<GoogleAuthVerify />} />
               <Route path="/activate" element={<ActivationPage />} />
+              <Route path="/pricing" element={<Pricing />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>

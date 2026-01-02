@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronDown, ChevronRight, Music, Volume2, Piano, Drum, Zap, Mic, Music2, Trash2, Loader2, Download, Play, Pause } from "lucide-react";
+import { ChevronDown, ChevronRight, Music, Volume2, Piano, Drum, Zap, Mic, Music2, Trash2, Loader2, Download, Play, Pause, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMusicLibrary } from "@/hooks/useMusicLibrary";
 import { useAuth } from "@/contexts/AuthContext";
@@ -450,6 +450,21 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
           })}
         </div>
       </div>
-    </div >
+
+      {/* Footer / Pricing Link */}
+      <div className="p-4 border-t border-border/50 bg-background/50 backdrop-blur-sm">
+        <Button
+          variant="outline"
+          className="w-full justify-start gap-2 border-primary/20 hover:bg-primary/10 hover:text-primary transition-all text-sm font-medium"
+          onClick={() => {
+            window.location.href = "/pricing";
+          }}
+        >
+          <Star className="w-4 h-4 text-primary" />
+          View Plans & Pricing
+          <ChevronRight className="w-3 h-3 ml-auto opacity-50" />
+        </Button>
+      </div>
+    </div>
   );
 }
