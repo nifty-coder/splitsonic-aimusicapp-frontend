@@ -55,9 +55,9 @@ export const UserProfile: React.FC = () => {
           <Avatar className="h-8 w-8">
             <AvatarImage
               src={
-                profile?.profile_picture ||
-                currentUser?.photoURL ||
-                undefined
+                profile?.profile_picture === "none"
+                  ? undefined
+                  : (profile?.profile_picture || currentUser?.photoURL || undefined)
               }
               alt={displayName}
             />

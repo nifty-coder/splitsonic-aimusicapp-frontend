@@ -163,7 +163,8 @@ const Profile = () => {
   const handleRemovePhoto = async () => {
     setSaving(true);
     try {
-      await updateProfilePicture(null);
+      // Use "none" as a sentinel to explicitly hide even provider-provided (Google) photos
+      await updateProfilePicture("none");
       toast({ title: 'Profile picture removed', description: 'Your profile picture was removed' });
     } catch (err: any) {
       console.error('Failed to remove profile picture', err);
@@ -269,7 +270,11 @@ const Profile = () => {
                 <div className="relative mx-auto mb-4 group cursor-pointer" onClick={handleChoosePhoto}>
                   <Avatar className="h-24 w-24 mx-auto border-2 border-white/10 transition-transform group-hover:scale-105">
                     <AvatarImage
-                      src={profile?.profile_picture || currentUser?.photoURL || undefined}
+                      src={
+                        profile?.profile_picture === "none"
+                          ? undefined
+                          : (profile?.profile_picture || currentUser?.photoURL || undefined)
+                      }
                       alt={displayName}
                     />
                     <AvatarFallback className="text-2xl font-semibold bg-primary text-primary-foreground">
@@ -411,18 +416,25 @@ const Profile = () => {
                   <div className="p-3 bg-white/10 rounded-md border border-white/20">
                     <div className="flex items-center justify-between">
                       <span className="text-white">
-                        {currentUser?.providerData?.[0]?.providerId === 'google.com' && currentUser?.photoURL
-                          ? 'Using Google profile picture'
-                          : profile?.profile_picture
-                            ? 'Custom profile picture'
-                            : 'Default avatar (initials)'
+                        {profile?.profile_picture === 'none'
+                          ? 'Default avatar (initials)'
+                          : currentUser?.providerData?.[0]?.providerId === 'google.com' && currentUser?.photoURL && !profile?.profile_picture
+                            ? 'Using Google profile picture'
+                            : profile?.profile_picture
+                              ? 'Custom profile picture'
+                              : 'Default avatar (initials)'
                         }
                       </span>
                     </div>
                   </div>
                   {isEditing && (
                     <div className="mt-3">
-                      <Button onClick={handleRemovePhoto} disabled={loadingState || !profile?.profile_picture} variant="ghost" className="text-red-400 hover:text-red-300 hover:bg-red-900/20 px-0">
+                      <Button
+                        onClick={handleRemovePhoto}
+                        disabled={loadingState || (profile?.profile_picture === 'none' && !currentUser?.photoURL) || (!profile?.profile_picture && !currentUser?.photoURL)}
+                        variant="ghost"
+                        className="text-red-400 hover:text-red-300 hover:bg-red-900/20 px-0"
+                      >
                         <Trash2 className="mr-2 h-4 w-4" />
                         Remove Profile Photo
                       </Button>
