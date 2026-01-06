@@ -303,7 +303,7 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
                           const trackKey = `${musicUrl.id}__${f.filename}`;
                           const isPlaying = playingKeys.has(trackKey);
                           const isOriginal = f.filename === 'original.mp3';
-                          const displayName = isOriginal ? 'Original Audio' : layer.name;
+                          const displayName = isOriginal ? 'Original Audio' : (layer.name === 'Drums' || layer.id === 'drums' ? 'Percussion' : layer.name);
                           const DisplayIcon = isOriginal ? Music2 : IconComponent;
 
                           return (
@@ -452,17 +452,22 @@ export function MusicSidebar({ onUrlSelect }: MusicSidebarProps) {
       </div>
 
       {/* Footer / Pricing Link */}
-      <div className="p-4 border-t border-border/50 bg-background/50 backdrop-blur-sm">
+      <div className="mt-auto px-4 border-t border-border/30 bg-background/50 backdrop-blur-sm flex items-center h-16">
         <Button
           variant="outline"
-          className="w-full justify-start gap-2 border-primary/20 hover:bg-primary/10 hover:text-primary transition-all text-sm font-medium"
+          className="w-full justify-start gap-3 border-primary/20 hover:bg-primary/10 hover:text-primary transition-all text-xs font-semibold h-9 rounded-lg"
           onClick={() => {
             window.location.href = "/pricing";
           }}
         >
-          <Star className="w-4 h-4 text-primary" />
-          View Plans & Pricing
-          <ChevronRight className="w-3 h-3 ml-auto opacity-50" />
+          <div className="p-1.5 rounded-md bg-primary/10">
+            <Star className="w-3.5 h-3.5 text-primary" />
+          </div>
+          <div className="flex flex-col items-start leading-none gap-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">Upgrade</span>
+            <span>View Pricing</span>
+          </div>
+          <ChevronRight className="w-3.5 h-3.5 ml-auto opacity-30" />
         </Button>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { MusicSidebar } from "@/components/sidebar/MusicSidebar";
 import { HeroSection } from "@/components/hero/HeroSection";
 import { UserProfile } from "@/components/auth/UserProfile";
+import { SpeechControl } from "@/components/speech/SpeechControl";
 import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
 
@@ -33,13 +34,14 @@ const Index = () => {
       )}
 
       <div className="flex-1 relative flex flex-col">
-        <div className="absolute top-4 right-4 z-10">
+        <div className="absolute top-4 right-4 z-10 flex items-center gap-3">
+          <SpeechControl />
           <UserProfile />
         </div>
         <HeroSection />
 
         {/* Footer */}
-        <footer className="py-4 text-center text-sm text-muted-foreground border-t border-border/30 bg-background/50 backdrop-blur-sm">
+        <footer className="h-16 border-t border-border/30 bg-background/50 backdrop-blur-sm flex items-center justify-center text-sm text-muted-foreground">
           <p>
             A product by{' '}
             <a

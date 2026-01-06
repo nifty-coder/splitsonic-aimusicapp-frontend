@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -9,7 +9,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Sparkles, Music, Upload, AlertCircle, FileAudio, CheckCircle2, X, Mic, Drum, Zap, Music2 } from "lucide-react";
+import { Sparkles, Music, Upload, AlertCircle, FileAudio, CheckCircle2, X, Mic, Drum, Zap, Music2, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMusicLibrary } from "@/hooks/useMusicLibrary";
 import { useToast } from "@/hooks/use-toast";
@@ -27,7 +27,8 @@ export function HeroSection() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [tosAgreed, setTosAgreed] = useState(false);
-  const [selectedStems, setSelectedStems] = useState<string[]>(['vocals', 'drums', 'bass', 'other', 'instrumental']);
+  const [selectedStems, setSelectedStems] = useState<string[]>(['vocals', 'percussion', 'bass', 'other', 'instrumental']);
+  const [isTosOpen, setIsTosOpen] = useState(false);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -47,9 +48,55 @@ export function HeroSection() {
 
     setSelectedFile(f);
     setUploadProgress(0);
-    // Reset file input value so same file can be selected again if needed
-    // e.target.value = ''; // We keep it bound for now or reset in analyze
   };
+
+  useEffect(() => {
+    const handleVoiceSplit = () => {
+      setTosAgreed(true);
+      // We use a timeout to ensure state update for tosAgreed is processed
+      // although handleAnalyze reads from state, sometimes batching can be tricky
+      setTimeout(() => {
+        const analyzeBtn = document.getElementById('analyze-button');
+        if (analyzeBtn && !analyzeBtn.hasAttribute('disabled')) {
+          handleAnalyze();
+        } else {
+          toast({
+            title: "Voice Command",
+            description: "Please select a file first.",
+            variant: "destructive"
+          });
+        }
+      }, 100);
+    };
+
+    window.addEventListener('voice-trigger-split', handleVoiceSplit);
+
+    const handleVoiceViewTos = () => {
+      setIsTosOpen(true);
+    };
+
+    const handleVoiceSelectStem = (e: any) => {
+      const stemId = e.detail?.stemId;
+      if (stemId === 'all') {
+        setSelectedStems(['vocals', 'percussion', 'bass', 'other', 'instrumental']);
+      } else if (stemId === 'none') {
+        setSelectedStems([]);
+      } else if (stemId) {
+        setSelectedStems(prev =>
+          prev.includes(stemId) ? prev.filter(s => s !== stemId) : [...prev, stemId]
+        );
+      }
+    };
+
+    window.addEventListener('voice-view-tos', handleVoiceViewTos);
+    window.addEventListener('voice-select-stem', handleVoiceSelectStem);
+
+    return () => {
+      window.removeEventListener('voice-trigger-split', handleVoiceSplit);
+      window.removeEventListener('voice-view-tos', handleVoiceViewTos);
+      window.removeEventListener('voice-select-stem', handleVoiceSelectStem);
+    };
+  }, [selectedFile, tosAgreed, selectedStems]);
 
   const clearSelection = () => {
     setSelectedFile(null);
@@ -185,6 +232,7 @@ export function HeroSection() {
 
                   {/* Analyze Button */}
                   <Button
+                    id="analyze-button"
                     onClick={handleAnalyze}
                     disabled={!selectedFile || uploadLoading || (!tosAgreed && !!selectedFile) || selectedStems.length === 0}
                     size="lg"
@@ -235,7 +283,7 @@ export function HeroSection() {
                       <button
                         onClick={() => {
                           if (selectedStems.length === 5) setSelectedStems([]);
-                          else setSelectedStems(['vocals', 'drums', 'bass', 'other', 'instrumental']);
+                          else setSelectedStems(['vocals', 'percussion', 'bass', 'other', 'instrumental']);
                         }}
                         className="text-xs uppercase tracking-wider font-bold text-white hover:opacity-80 transition-opacity"
                       >
@@ -246,7 +294,7 @@ export function HeroSection() {
                     <div className="flex flex-wrap gap-3">
                       {[
                         { id: 'vocals', label: 'Vocals', icon: Mic },
-                        { id: 'drums', label: 'Drums', icon: Drum },
+                        { id: 'percussion', label: 'Percussion', icon: Drum },
                         { id: 'bass', label: 'Bass', icon: Volume2 },
                         { id: 'other', label: 'Other', icon: Zap },
                         { id: 'instrumental', label: 'Instrumental', icon: Music2 },
@@ -324,7 +372,7 @@ export function HeroSection() {
                         I agree to the
                       </label>
 
-                      <Dialog>
+                      <Dialog open={isTosOpen} onOpenChange={setIsTosOpen}>
                         <DialogTrigger asChild>
                           <span className="text-primary hover:underline cursor-pointer font-bold">
                             Terms of Service
@@ -391,36 +439,49 @@ export function HeroSection() {
           </div>
         </div>
 
-        {/* Features Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto mt-16 animate-slide-up" style={{ animationDelay: "0.4s" }}>
-          {[
-            {
-              icon: Volume2,
-              title: "Bass Extraction",
-              description: "Isolate low-frequency bass lines and sub-bass elements"
-            },
-            {
-              icon: Music,
-              title: "Instrument Separation",
-              description: "Extract individual instruments including piano, guitar, and strings"
-            },
-            {
-              icon: Sparkles,
-              title: "AI-Powered Analysis",
-              description: "Advanced machine learning for precise audio separation"
-            }
-          ].map((feature, index) => (
-            <div
-              key={index}
-              className="p-6 bg-card/50 backdrop-blur-sm border border-border/30 rounded-xl hover:bg-card/70 transition-all duration-300 group"
-            >
-              <div className="p-3 rounded-lg bg-gradient-secondary w-fit mb-4 group-hover:scale-110 transition-transform">
-                <feature.icon className="w-6 h-6 text-primary" />
+        {/* Voice Commands Section */}
+        <div className="space-y-6 max-w-4xl mx-auto mt-16 animate-slide-up" style={{ animationDelay: "0.4s" }}>
+          <h2 className="text-primary text-sm font-bold uppercase tracking-widest">Available Voice Commands</h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[
+              {
+                icon: Upload,
+                title: "File Actions",
+                commands: ["\"Upload file\"", "\"Split music\"", "\"View TOS\""],
+                color: "text-blue-400"
+              },
+              {
+                icon: Play,
+                title: "Playback",
+                commands: ["\"Play all\"", "\"Play {stems} from {song}\"", "\"Stop music\""],
+                color: "text-green-400"
+              },
+              {
+                icon: Zap,
+                title: "App Support",
+                commands: ["\"View Profile\"", "\"Go Back\"", "\"Stop listening\""],
+                color: "text-purple-400"
+              }
+            ].map((feature, index) => (
+              <div
+                key={index}
+                className="p-6 bg-card/40 backdrop-blur-sm border border-border/20 rounded-2xl hover:bg-card/60 transition-all duration-300 group text-left"
+              >
+                <div className={cn("p-2.5 rounded-xl bg-background/50 w-fit mb-4 group-hover:scale-110 transition-transform border border-border/10", feature.color)}>
+                  <feature.icon className="w-5 h-5" />
+                </div>
+                <h3 className="font-bold text-foreground mb-3 text-sm uppercase tracking-wide">{feature.title}</h3>
+                <div className="space-y-2">
+                  {feature.commands.map((cmd, cIdx) => (
+                    <p key={cIdx} className="text-xs text-muted-foreground font-mono bg-muted/20 px-2 py-1 rounded w-fit">
+                      {cmd}
+                    </p>
+                  ))}
+                </div>
               </div>
-              <h3 className="font-semibold text-foreground mb-2">{feature.title}</h3>
-              <p className="text-sm text-muted-foreground">{feature.description}</p>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     </div>

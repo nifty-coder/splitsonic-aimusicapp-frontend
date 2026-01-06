@@ -3,6 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { updateProfile as firebaseUpdateProfile, deleteUser } from 'firebase/auth'; // Renamed to avoid confusion
 import { useProfileAPI } from '@/hooks/useProfileAPI';
+import { SpeechControl } from '@/components/speech/SpeechControl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -247,16 +248,17 @@ const Profile = () => {
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <div className="flex items-center mb-4">
+          <div className="flex items-center justify-between mb-4">
             <Button
               variant="ghost"
               size="sm"
-              className="text-white hover:bg-white/10 mr-4"
+              className="text-white hover:bg-white/10"
               onClick={() => navigate('/')}
             >
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back to App
             </Button>
+            <SpeechControl />
           </div>
           <h1 className="text-4xl font-bold text-white mb-2">Profile</h1>
           <p className="text-white/80">Manage your account settings and preferences</p>
